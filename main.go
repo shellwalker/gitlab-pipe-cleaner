@@ -11,125 +11,135 @@ import (
 )
 
 func main() {
-	// https://docs.gitlab.com/ee/api/projects.html#list-all-projects
-	projectsURL := fmt.Sprintf("%s/projects?per_page=1000", config.GitlabURL)
-	data, err := APIRequest("GET", projectsURL)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	Projects := Projects{}
-	jsonErr := json.Unmarshal(data, &Projects)
-	if jsonErr != nil {
-		fmt.Println("Error parsing JSON for projects")
-		os.Exit(1)
-	}
-
+	page := 1
 	totalDeletedPipelines := 0
 	totalDeletedJobs := 0
 	totalDeletedSize := 0
 	cutOff := float64(config.KeepDays * 24)
 
-	for _, project := range Projects {
-		if !project.JobsEnabled {
-			continue
-		}
-		// https://docs.gitlab.com/ee/api/pipelines.html#list-project-pipelines
-		pipelinesURL := fmt.Sprintf("%s/projects/%d/pipelines?per_page=1000", config.GitlabURL, project.ID)
-		data, err := APIRequest("GET", pipelinesURL)
+	for page < 10 {
+		// https://docs.gitlab.com/ee/api/projects.html#list-all-projects
+		projectsURL := fmt.Sprintf("%s/projects?per_page=100&page=%d", config.GitlabURL, page)
+		page += 1
+		data, err := APIRequest("GET", projectsURL)
 		if err != nil {
-			fmt.Println("Error:", err)
-			continue
+			fmt.Println(err)
+			os.Exit(1)
 		}
 
-		Pipelines := Pipelines{}
-		jsonErr := json.Unmarshal(data, &Pipelines)
+		Projects := Projects{}
+		jsonErr := json.Unmarshal(data, &Projects)
 		if jsonErr != nil {
-			fmt.Println("Error parsing JSON for pipelines")
-			continue
+			fmt.Println("Error parsing JSON for projects")
+			os.Exit(1)
 		}
 
-		if len(Pipelines) <= config.MinPipelines {
-			// fmt.Println(project.PathWithNamespace, "- no pipelines to delete")
-			continue
+		if 0 == len(Projects) {
+			fmt.Println("No more projects data exist!.")
+			fmt.Println("=============================")
+			break
 		}
 
-		PipelinesToDelete := Pipelines[config.MinPipelines:]
-
-		fmt.Printf("-----\n%s - Examining %d pipeline(s)\n", project.PathWithNamespace, len(PipelinesToDelete))
-
-		for _, pipeline := range PipelinesToDelete {
-
-			if pipeline.Status == "running" || pipeline.Status == "pending" {
-				fmt.Printf("- Skipping %s pipeline #%d\n", pipeline.Status, pipeline.ID)
+		for _, project := range Projects {
+			if !project.JobsEnabled {
 				continue
 			}
-
-			// https://docs.gitlab.com/ee/api/jobs.html#list-pipeline-jobs
-			jobsURL := fmt.Sprintf("%s/projects/%d/pipelines/%d/jobs", config.GitlabURL, project.ID, pipeline.ID)
-			data, err := APIRequest("GET", jobsURL)
+			// https://docs.gitlab.com/ee/api/pipelines.html#list-project-pipelines
+			pipelinesURL := fmt.Sprintf("%s/projects/%d/pipelines?per_page=1000", config.GitlabURL, project.ID)
+			data, err := APIRequest("GET", pipelinesURL)
 			if err != nil {
 				fmt.Println("Error:", err)
 				continue
 			}
 
-			Jobs := Jobs{}
-			jsonErr := json.Unmarshal(data, &Jobs)
+			Pipelines := Pipelines{}
+			jsonErr := json.Unmarshal(data, &Pipelines)
 			if jsonErr != nil {
 				fmt.Println("Error parsing JSON for pipelines")
 				continue
 			}
 
-			canDelete := true
+			if len(Pipelines) <= config.MinPipelines {
+				// fmt.Println(project.PathWithNamespace, "- no pipelines to delete")
+				continue
+			}
 
-			for _, job := range Jobs {
+			PipelinesToDelete := Pipelines[config.MinPipelines:]
 
-				jobSize := 0
+			fmt.Printf("-----\n%s - Examining %d pipeline(s)\n", project.PathWithNamespace, len(PipelinesToDelete))
 
-				if time.Since(job.CreatedAt).Hours() < cutOff {
-					// fmt.Printf("- Skipping pipeline #%d as newer than %d days (%v)\n", pipeline.ID, config.KeepDays, job.CreatedAt)
-					canDelete = false
-					break
+			for _, pipeline := range PipelinesToDelete {
+
+				if pipeline.Status == "running" || pipeline.Status == "pending" {
+					fmt.Printf("- Skipping %s pipeline #%d\n", pipeline.Status, pipeline.ID)
+					continue
 				}
 
-				for _, artifact := range job.Artifacts {
-					jobSize = jobSize + artifact.Size
+				// https://docs.gitlab.com/ee/api/jobs.html#list-pipeline-jobs
+				jobsURL := fmt.Sprintf("%s/projects/%d/pipelines/%d/jobs", config.GitlabURL, project.ID, pipeline.ID)
+				data, err := APIRequest("GET", jobsURL)
+				if err != nil {
+					fmt.Println("Error:", err)
+					continue
 				}
 
-				if deleteFiles {
-					// https://docs.gitlab.com/ee/api/jobs.html#erase-a-job
-					eraseURL := fmt.Sprintf("%s/projects/%d/jobs/%d/erase", config.GitlabURL, project.ID, job.ID)
-					_, err = APIRequest("POST", eraseURL)
-					if err == nil {
-						// ignore errors as artifacts may have been auto-deleted based on timer
-						fmt.Printf("- Deleted %d artifact(s) - %dKb\n", len(job.Artifacts), bToKb(jobSize))
+				Jobs := Jobs{}
+				jsonErr := json.Unmarshal(data, &Jobs)
+				if jsonErr != nil {
+					fmt.Println("Error parsing JSON for pipelines")
+					continue
+				}
+
+				canDelete := true
+
+				for _, job := range Jobs {
+
+					jobSize := 0
+
+					if time.Since(job.CreatedAt).Hours() < cutOff {
+						// fmt.Printf("- Skipping pipeline #%d as newer than %d days (%v)\n", pipeline.ID, config.KeepDays, job.CreatedAt)
+						canDelete = false
+						break
+					}
+
+					for _, artifact := range job.Artifacts {
+						jobSize = jobSize + artifact.Size
+					}
+
+					if deleteFiles {
+						// https://docs.gitlab.com/ee/api/jobs.html#erase-a-job
+						eraseURL := fmt.Sprintf("%s/projects/%d/jobs/%d/erase", config.GitlabURL, project.ID, job.ID)
+						_, err = APIRequest("POST", eraseURL)
+						if err == nil {
+							// ignore errors as artifacts may have been auto-deleted based on timer
+							fmt.Printf("- Deleted %d artifact(s) - %dKb\n", len(job.Artifacts), bToKb(jobSize))
+							totalDeletedSize = totalDeletedSize + jobSize
+							totalDeletedJobs++
+						}
+					} else {
+						fmt.Printf("- Would delete %d artifact(s) - %dKb\n", len(job.Artifacts), bToKb(jobSize))
 						totalDeletedSize = totalDeletedSize + jobSize
 						totalDeletedJobs++
 					}
-				} else {
-					fmt.Printf("- Would delete %d artifact(s) - %dKb\n", len(job.Artifacts), bToKb(jobSize))
-					totalDeletedSize = totalDeletedSize + jobSize
-					totalDeletedJobs++
+
 				}
 
-			}
+				if canDelete {
+					if deleteFiles {
+						// https://docs.gitlab.com/ee/api/pipelines.html#delete-a-pipeline
+						deleteURL := fmt.Sprintf("%s/projects/%d/pipelines/%d", config.GitlabURL, project.ID, pipeline.ID)
+						_, err := APIRequest("DELETE", deleteURL)
+						if err != nil {
+							fmt.Printf("- Error deleting pipeline #%d: %s\n", pipeline.ID, err)
+						} else {
+							fmt.Printf("- Delete pipeline #%d\n", pipeline.ID)
+							totalDeletedPipelines++
+						}
 
-			if canDelete {
-				if deleteFiles {
-					// https://docs.gitlab.com/ee/api/pipelines.html#delete-a-pipeline
-					deleteURL := fmt.Sprintf("%s/projects/%d/pipelines/%d", config.GitlabURL, project.ID, pipeline.ID)
-					_, err := APIRequest("DELETE", deleteURL)
-					if err != nil {
-						fmt.Printf("- Error deleting pipeline #%d: %s\n", pipeline.ID, err)
 					} else {
-						fmt.Printf("- Delete pipeline #%d\n", pipeline.ID)
+						fmt.Printf("- Would delete pipeline #%d\n", pipeline.ID)
 						totalDeletedPipelines++
 					}
-
-				} else {
-					fmt.Printf("- Would delete pipeline #%d\n", pipeline.ID)
-					totalDeletedPipelines++
 				}
 			}
 		}
