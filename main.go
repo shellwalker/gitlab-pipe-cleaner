@@ -34,7 +34,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		if 0 == len(Projects) {
+		if len(Projects) == 0 {
 			fmt.Println("No more projects data exist!.")
 			fmt.Println("=============================")
 			break
@@ -45,7 +45,7 @@ func main() {
 				continue
 			}
 			// https://docs.gitlab.com/ee/api/pipelines.html#list-project-pipelines
-			pipelinesURL := fmt.Sprintf("%s/projects/%d/pipelines?per_page=1000", config.GitlabURL, project.ID)
+			pipelinesURL := fmt.Sprintf("%s/projects/%d/pipelines?per_page=100&order_by=updated_at&sort=asc", config.GitlabURL, project.ID)
 			data, err := APIRequest("GET", pipelinesURL)
 			if err != nil {
 				fmt.Println("Error:", err)
