@@ -45,7 +45,7 @@ func main() {
 				continue
 			}
 			// https://docs.gitlab.com/ee/api/pipelines.html#list-project-pipelines
-			pipelinesURL := fmt.Sprintf("%s/projects/%d/pipelines?per_page=100&order_by=updated_at&sort=asc", config.GitlabURL, project.ID)
+			pipelinesURL := fmt.Sprintf("%s/projects/%d/pipelines?per_page=100&order_by=updated_at&sort=desc", config.GitlabURL, project.ID)
 			data, err := APIRequest("GET", pipelinesURL)
 			if err != nil {
 				fmt.Println("Error:", err)
@@ -60,7 +60,7 @@ func main() {
 			}
 
 			if len(Pipelines) <= config.MinPipelines {
-				// fmt.Println(project.PathWithNamespace, "- no pipelines to delete")
+				fmt.Println(project.PathWithNamespace, "- no pipelines to delete", len(Pipelines))
 				continue
 			}
 
@@ -97,7 +97,7 @@ func main() {
 					jobSize := 0
 
 					if time.Since(job.CreatedAt).Hours() < cutOff {
-						// fmt.Printf("- Skipping pipeline #%d as newer than %d days (%v)\n", pipeline.ID, config.KeepDays, job.CreatedAt)
+						fmt.Printf("- Skipping pipeline #%d as newer than %d days (%v)\n", pipeline.ID, config.KeepDays, job.CreatedAt)
 						canDelete = false
 						break
 					}
